@@ -1,122 +1,99 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-@Time    : 2023/5/28 00:00
-@Author  : alexanderwu
-@File    : milvus_store.py
-"""
-from typing import TypedDict
-
-import numpy as np
-from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from metagpt.document_store.base_store import BaseStore
 
-type_mapping = {
-    int: DataType.INT64,
-    str: DataType.VARCHAR,
-    float: DataType.DOUBLE,
-    np.ndarray: DataType.FLOAT_VECTOR
-}
 
+@dataclass
+class MilvusConnection:
+    """
+    Args:
+        uri: milvus url
+        token: milvus token
+    """
 
-def columns_to_milvus_schema(columns: dict, primary_col_name: str = "", desc: str = ""):
-    """Assume the structure of columns is str: regular type"""
-    fields = []
-    for col, ctype in columns.items():
-        if ctype == str:
-            mcol = FieldSchema(name=col, dtype=type_mapping[ctype], max_length=100)
-        elif ctype == np.ndarray:
-            mcol = FieldSchema(name=col, dtype=type_mapping[ctype], dim=2)
-        else:
-            mcol = FieldSchema(name=col, dtype=type_mapping[ctype], is_primary=(col == primary_col_name))
-        fields.append(mcol)
-    schema = CollectionSchema(fields, description=desc)
-    return schema
-
-
-class MilvusConnection(TypedDict):
-    alias: str
-    host: str
-    port: str
+    uri: str = None
+    token: str = None
 
 
 class MilvusStore(BaseStore):
-    """
-    FIXME: ADD TESTS
-    https://milvus.io/docs/v2.0.x/create_collection.md
-    """
+    def __init__(self, connect: MilvusConnection):
+        try:
+            from pymilvus import MilvusClient
+        except ImportError:
+            raise Exception("Please install pymilvus first.")
+        if not connect.uri:
+            raise Exception("please check MilvusConnection, uri must be set.")
+        self.client = MilvusClient(uri=connect.uri, token=connect.token)
 
-    def __init__(self, connection):
-        connections.connect(**connection)
-        self.collection = None
+    def create_collection(self, collection_name: str, dim: int, enable_dynamic_schema: bool = True):
+        from pymilvus import DataType
 
-    def _create_collection(self, name, schema):
-        collection = Collection(
-            name=name,
+        if self.client.has_collection(collection_name=collection_name):
+            self.client.drop_collection(collection_name=collection_name)
+
+        schema = self.client.create_schema(
+            auto_id=False,
+            enable_dynamic_field=False,
+        )
+        schema.add_field(field_name="id", datatype=DataType.VARCHAR, is_primary=True, max_length=36)
+        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim)
+
+        index_params = self.client.prepare_index_params()
+        index_params.add_index(field_name="vector", index_type="AUTOINDEX", metric_type="COSINE")
+
+        self.client.create_collection(
+            collection_name=collection_name,
             schema=schema,
-            using='default',
-            shards_num=2,
-            consistency_level="Strong"
+            index_params=index_params,
+            enable_dynamic_schema=enable_dynamic_schema,
         )
-        return collection
 
-    def create_collection(self, name, columns):
-        schema = columns_to_milvus_schema(columns, 'idx')
-        self.collection = self._create_collection(name, schema)
-        return self.collection
+    @staticmethod
+    def build_filter(key, value) -> str:
+        if isinstance(value, str):
+            filter_expression = f'{key} == "{value}"'
+        else:
+            if isinstance(value, list):
+                filter_expression = f"{key} in {value}"
+            else:
+                filter_expression = f"{key} == {value}"
 
-    def drop(self, name):
-        Collection(name).drop()
+        return filter_expression
 
-    def load_collection(self):
-        self.collection.load()
+    def search(
+        self,
+        collection_name: str,
+        query: List[float],
+        filter: Dict = None,
+        limit: int = 10,
+        output_fields: Optional[List[str]] = None,
+    ) -> List[dict]:
+        filter_expression = " and ".join([self.build_filter(key, value) for key, value in filter.items()])
+        print(filter_expression)
 
-    def build_index(self, field='emb'):
-        self.collection.create_index(field, {"index_type": "FLAT", "metric_type": "L2", "params": {}})
+        res = self.client.search(
+            collection_name=collection_name,
+            data=[query],
+            filter=filter_expression,
+            limit=limit,
+            output_fields=output_fields,
+        )[0]
 
-    def search(self, query: list[list[float]], *args, **kwargs):
-        """
-        FIXME: ADD TESTS
-        https://milvus.io/docs/v2.0.x/search.md
-        All search and query operations within Milvus are executed in memory. Load the collection to memory before conducting a vector similarity search.
-        Note the above description, is this logic serious? This should take a long time, right?
-        """
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
-        results = self.collection.search(
-            data=query,
-            anns_field=kwargs.get('field', 'emb'),
-            param=search_params,
-            limit=10,
-            expr=None,
-            consistency_level="Strong"
-        )
-        # FIXME: results contain id, but to get the actual value from the id, we still need to call the query interface
-        return results
+        return res
 
-    def write(self, name, schema, *args, **kwargs):
-        """
-        FIXME: ADD TESTS
-        https://milvus.io/docs/v2.0.x/create_collection.md
-        :param args:
-        :param kwargs:
-        :return:
-        """
-        raise NotImplementedError
+    def add(self, collection_name: str, _ids: List[str], vector: List[List[float]], metadata: List[Dict[str, Any]]):
+        data = dict()
 
-    def add(self, data, *args, **kwargs):
-        """
-        FIXME: ADD TESTS
-        https://milvus.io/docs/v2.0.x/insert_data.md
-        import random
-        data = [
-          [i for i in range(2000)],
-          [i for i in range(10000, 12000)],
-          [[random.random() for _ in range(2)] for _ in range(2000)],
-        ]
+        for i, id in enumerate(_ids):
+            data["id"] = id
+            data["vector"] = vector[i]
+            data["metadata"] = metadata[i]
 
-        :param args:
-        :param kwargs:
-        :return:
-        """
-        self.collection.insert(data)
+        self.client.upsert(collection_name=collection_name, data=data)
+
+    def delete(self, collection_name: str, _ids: List[str]):
+        self.client.delete(collection_name=collection_name, ids=_ids)
+
+    def write(self, *args, **kwargs):
+        pass

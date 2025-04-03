@@ -20,33 +20,35 @@ def _paragraphs(n):
 
 
 @pytest.mark.parametrize(
-    "msgs, model_name, system_text, reserved, expected",
+    "msgs, model, system_text, reserved, expected",
     [
-        (_msgs(), "gpt-3.5-turbo", "System", 1500, 1),
+        (_msgs(), "gpt-3.5-turbo-0613", "System", 1500, 1),
         (_msgs(), "gpt-3.5-turbo-16k", "System", 3000, 6),
         (_msgs(), "gpt-3.5-turbo-16k", "Hello," * 1000, 3000, 5),
         (_msgs(), "gpt-4", "System", 2000, 3),
         (_msgs(), "gpt-4", "Hello," * 1000, 2000, 2),
         (_msgs(), "gpt-4-32k", "System", 4000, 14),
         (_msgs(), "gpt-4-32k", "Hello," * 2000, 4000, 12),
-    ]
+    ],
 )
 def test_reduce_message_length(msgs, model_name, system_text, reserved, expected):
-    assert len(reduce_message_length(msgs, model_name, system_text, reserved)) / (len("Hello,")) / 1000 == expected
+    length = len(reduce_message_length(msgs, model_name, system_text, reserved)) / (len("Hello,")) / 1000
+    assert length == expected
 
 
 @pytest.mark.parametrize(
-    "text, prompt_template, model_name, system_text, reserved, expected",
+    "text, prompt_template, model, system_text, reserved, expected",
     [
-        (" ".join("Hello World." for _ in range(1000)), "Prompt: {}", "gpt-3.5-turbo", "System", 1500, 2),
+        (" ".join("Hello World." for _ in range(1000)), "Prompt: {}", "gpt-3.5-turbo-0613", "System", 1500, 2),
         (" ".join("Hello World." for _ in range(1000)), "Prompt: {}", "gpt-3.5-turbo-16k", "System", 3000, 1),
         (" ".join("Hello World." for _ in range(4000)), "Prompt: {}", "gpt-4", "System", 2000, 2),
         (" ".join("Hello World." for _ in range(8000)), "Prompt: {}", "gpt-4-32k", "System", 4000, 1),
-    ]
+        (" ".join("Hello World" for _ in range(8000)), "Prompt: {}", "gpt-3.5-turbo-0613", "System", 1000, 8),
+    ],
 )
 def test_generate_prompt_chunk(text, prompt_template, model_name, system_text, reserved, expected):
-    ret = list(generate_prompt_chunk(text, prompt_template, model_name, system_text, reserved))
-    assert len(ret) == expected
+    chunk = len(list(generate_prompt_chunk(text, prompt_template, model_name, system_text, reserved)))
+    assert chunk == expected
 
 
 @pytest.mark.parametrize(
@@ -58,7 +60,7 @@ def test_generate_prompt_chunk(text, prompt_template, model_name, system_text, r
         ("......", ".", 2, ["...", "..."]),
         ("......", ".", 3, ["..", "..", ".."]),
         (".......", ".", 2, ["....", "..."]),
-    ]
+    ],
 )
 def test_split_paragraph(paragraph, sep, count, expected):
     ret = split_paragraph(paragraph, sep, count)
@@ -71,7 +73,7 @@ def test_split_paragraph(paragraph, sep, count, expected):
         ("Hello\\nWorld", "Hello\nWorld"),
         ("Hello\\tWorld", "Hello\tWorld"),
         ("Hello\\u0020World", "Hello World"),
-    ]
+    ],
 )
 def test_decode_unicode_escape(text, expected):
     assert decode_unicode_escape(text) == expected

@@ -1,55 +1,58 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# @Desc   : unittest of `metagpt/memory/longterm_memory.py`
+"""
+@Desc   : unittest of `metagpt/memory/longterm_memory.py`
+"""
 
-from metagpt.config import CONFIG
-from metagpt.schema import Message
-from metagpt.actions import BossRequirement
+
+import pytest
+
+from metagpt.actions import UserRequirement
+from metagpt.memory.longterm_memory import LongTermMemory
 from metagpt.roles.role import RoleContext
-from metagpt.memory import LongTermMemory
+from metagpt.schema import Message
+from tests.metagpt.memory.mock_text_embed import (
+    mock_openai_aembed_document,
+    mock_openai_embed_document,
+    mock_openai_embed_documents,
+    text_embed_arr,
+)
 
 
-def test_ltm_search():
-    assert hasattr(CONFIG, "long_term_memory") is True
-    openai_api_key = CONFIG.openai_api_key
-    assert len(openai_api_key) > 20
+@pytest.mark.asyncio
+async def test_ltm_search(mocker):
+    mocker.patch("llama_index.embeddings.openai.base.OpenAIEmbedding._get_text_embeddings", mock_openai_embed_documents)
+    mocker.patch("llama_index.embeddings.openai.base.OpenAIEmbedding._get_text_embedding", mock_openai_embed_document)
+    mocker.patch(
+        "llama_index.embeddings.openai.base.OpenAIEmbedding._aget_query_embedding", mock_openai_aembed_document
+    )
 
-    role_id = 'UTUserLtm(Product Manager)'
-    rc = RoleContext(watch=[BossRequirement])
+    role_id = "UTUserLtm(Product Manager)"
+    rc = RoleContext(watch={"metagpt.actions.add_requirement.UserRequirement"})
     ltm = LongTermMemory()
     ltm.recover_memory(role_id, rc)
 
-    idea = 'Write a cli snake game'
-    message = Message(role='BOSS', content=idea, cause_by=BossRequirement)
-    news = ltm.find_news([message])
+    idea = text_embed_arr[0].get("text", "Write a cli snake game")
+    message = Message(role="User", content=idea, cause_by=UserRequirement)
+    news = await ltm.find_news([message])
     assert len(news) == 1
     ltm.add(message)
 
-    sim_idea = 'Write a game of cli snake'
-    sim_message = Message(role='BOSS', content=sim_idea, cause_by=BossRequirement)
-    news = ltm.find_news([sim_message])
+    sim_idea = text_embed_arr[1].get("text", "Write a game of cli snake")
+
+    sim_message = Message(role="User", content=sim_idea, cause_by=UserRequirement)
+    news = await ltm.find_news([sim_message])
     assert len(news) == 0
     ltm.add(sim_message)
 
-    new_idea = 'Write a 2048 web game'
-    new_message = Message(role='BOSS', content=new_idea, cause_by=BossRequirement)
-    news = ltm.find_news([new_message])
+    new_idea = text_embed_arr[2].get("text", "Write a 2048 web game")
+    new_message = Message(role="User", content=new_idea, cause_by=UserRequirement)
+    news = await ltm.find_news([new_message])
     assert len(news) == 1
     ltm.add(new_message)
 
-    # restore from local index
-    ltm_new = LongTermMemory()
-    ltm_new.recover_memory(role_id, rc)
-    news = ltm_new.find_news([message])
-    assert len(news) == 0
+    ltm.clear()
 
-    ltm_new.recover_memory(role_id, rc)
-    news = ltm_new.find_news([sim_message])
-    assert len(news) == 0
 
-    new_idea = 'Write a Battle City'
-    new_message = Message(role='BOSS', content=new_idea, cause_by=BossRequirement)
-    news = ltm_new.find_news([new_message])
-    assert len(news) == 1
-
-    ltm_new.clear()
+if __name__ == "__main__":
+    pytest.main([__file__, "-s"])

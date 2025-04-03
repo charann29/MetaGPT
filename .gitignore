@@ -1,7 +1,7 @@
 ### Python template
 
 # Byte-compiled / optimized / DLL files
-__pycache__/
+__pycache__
 *.py[cod]
 *$py.class
 
@@ -27,6 +27,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+metagpt/tools/schemas/
+examples/data/search_kb/*.json
 
 # PyInstaller
 #  Usually these files are written by a python scripts from a template
@@ -52,6 +54,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+unittest.txt
 
 # Translations
 *.mo
@@ -59,6 +62,7 @@ cover/
 
 # Django stuff:
 *.log
+logs
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -143,24 +147,54 @@ cython_debug/
 allure-report
 allure-results
 
-# idea
+# idea / vscode / macos
 .idea
 .DS_Store
 .vscode
 
-log.txt
-docs/scripts/set_env.sh
 key.yaml
-output.json
-data
-data/output_add.json
+/data/
 data.ms
 examples/nb/
+examples/default__vector_store.json
+examples/docstore.json
+examples/graph_store.json
+examples/image__vector_store.json
+examples/index_store.json
 .chroma
+.chroma_exp_data
+.role_memory_data
 *~$*
 workspace/*
-*.mmd
 tmp
-output.wav
 metagpt/roles/idea_agent.py
 .aider*
+*.bak
+*.bk
+
+# output folder
+output
+tmp.png
+.dependencies.json
+tests/metagpt/utils/file_repo_git
+tests/data/rsp_cache_new.json
+tests/data/serdeser_storage/
+*.tmp
+*.png
+htmlcov
+htmlcov.*
+cov.xml
+*.dot
+*.pkl
+*.faiss
+*-structure.csv
+*-structure.json
+*.dot
+.python-version
+tests/data/requirements/*.jpg
+*.csv
+metagpt/ext/sela/results/*
+.chainlit/
+
+metagpt/ext/aflow/data
+metagpt/ext/aflow/scripts/optimized

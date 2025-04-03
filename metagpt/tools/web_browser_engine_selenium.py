@@ -1,21 +1,25 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 from __future__ import annotations
 
 import asyncio
 import importlib
 from concurrent import futures
 from copy import deepcopy
-from typing import Literal
+from typing import Callable, Literal, Optional
 
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from webdriver_manager.core.download_manager import WDMDownloadManager
+from webdriver_manager.core.http import WDMHttpClient
 
-from metagpt.config import CONFIG
 from metagpt.utils.parse_html import WebPage
 
 
-class SeleniumWrapper:
+class SeleniumWrapper(BaseModel):
     """Wrapper around Selenium.
 
     To use this module, you should check the following:
@@ -27,36 +31,39 @@ class SeleniumWrapper:
        can scrape web pages using the Selenium WebBrowserEngine.
     """
 
-    def __init__(
-        self,
-        browser_type: Literal["chrome", "firefox", "edge", "ie"] | None = None,
-        launch_kwargs: dict | None = None,
-        *,
-        loop: asyncio.AbstractEventLoop | None = None,
-        executor: futures.Executor | None = None,
-    ) -> None:
-        if browser_type is None:
-            browser_type = CONFIG.selenium_browser_type
-        self.browser_type = browser_type
-        launch_kwargs = launch_kwargs or {}
-        if CONFIG.global_proxy and "proxy-server" not in launch_kwargs:
-            launch_kwargs["proxy-server"] = CONFIG.global_proxy
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        self.executable_path = launch_kwargs.pop("executable_path", None)
-        self.launch_args = [f"--{k}={v}" for k, v in launch_kwargs.items()]
-        self._has_run_precheck = False
-        self._get_driver = None
-        self.loop = loop
-        self.executor = executor
+    browser_type: Literal["chrome", "firefox", "edge", "ie"] = "chrome"
+    launch_kwargs: dict = Field(default_factory=dict)
+    proxy: Optional[str] = None
+    loop: Optional[asyncio.AbstractEventLoop] = None
+    executor: Optional[futures.Executor] = None
+    _has_run_precheck: bool = PrivateAttr(False)
+    _get_driver: Optional[Callable] = PrivateAttr(None)
 
-    async def run(self, url: str, *urls: str) -> WebPage | list[WebPage]:
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        if self.proxy and "proxy-server" not in self.launch_kwargs:
+            self.launch_kwargs["proxy-server"] = self.proxy
+
+    @property
+    def launch_args(self):
+        return [f"--{k}={v}" for k, v in self.launch_kwargs.items() if k != "executable_path"]
+
+    @property
+    def executable_path(self):
+        return self.launch_kwargs.get("executable_path")
+
+    async def run(self, url: str, *urls: str, per_page_timeout: float = None) -> WebPage | list[WebPage]:
         await self._run_precheck()
 
-        _scrape = lambda url: self.loop.run_in_executor(self.executor, self._scrape_website, url)
+        _scrape = lambda url, per_page_timeout: self.loop.run_in_executor(
+            self.executor, self._scrape_website, url, per_page_timeout
+        )
 
         if urls:
-            return await asyncio.gather(_scrape(url), *(_scrape(i) for i in urls))
-        return await _scrape(url)
+            return await asyncio.gather(_scrape(url, per_page_timeout), *(_scrape(i, per_page_timeout) for i in urls))
+        return await _scrape(url, per_page_timeout)
 
     async def _run_precheck(self):
         if self._has_run_precheck:
@@ -64,15 +71,17 @@ class SeleniumWrapper:
         self.loop = self.loop or asyncio.get_event_loop()
         self._get_driver = await self.loop.run_in_executor(
             self.executor,
-            lambda: _gen_get_driver_func(self.browser_type, *self.launch_args, executable_path=self.executable_path),
+            lambda: _gen_get_driver_func(
+                self.browser_type, *self.launch_args, executable_path=self.executable_path, proxy=self.proxy
+            ),
         )
         self._has_run_precheck = True
 
-    def _scrape_website(self, url):
+    def _scrape_website(self, url, timeout: float = None):
         with self._get_driver() as driver:
             try:
                 driver.get(url)
-                WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                WebDriverWait(driver, timeout or 30).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                 inner_text = driver.execute_script("return document.body.innerText;")
                 html = driver.page_source
             except Exception as e:
@@ -89,7 +98,18 @@ _webdriver_manager_types = {
 }
 
 
-def _gen_get_driver_func(browser_type, *args, executable_path=None):
+class WDMHttpProxyClient(WDMHttpClient):
+    def __init__(self, proxy: str = None):
+        super().__init__()
+        self.proxy = proxy
+
+    def get(self, url, **kwargs):
+        if "proxies" not in kwargs and self.proxy:
+            kwargs["proxies"] = {"all": self.proxy}
+        return super().get(url, **kwargs)
+
+
+def _gen_get_driver_func(browser_type, *args, executable_path=None, proxy=None):
     WebDriver = getattr(importlib.import_module(f"selenium.webdriver.{browser_type}.webdriver"), "WebDriver")
     Service = getattr(importlib.import_module(f"selenium.webdriver.{browser_type}.service"), "Service")
     Options = getattr(importlib.import_module(f"selenium.webdriver.{browser_type}.options"), "Options")
@@ -97,7 +117,7 @@ def _gen_get_driver_func(browser_type, *args, executable_path=None):
     if not executable_path:
         module_name, type_name = _webdriver_manager_types[browser_type]
         DriverManager = getattr(importlib.import_module(module_name), type_name)
-        driver_manager = DriverManager()
+        driver_manager = DriverManager(download_manager=WDMDownloadManager(http_client=WDMHttpProxyClient(proxy=proxy)))
         # driver_manager.driver_cache.find_driver(driver_manager.driver))
         executable_path = driver_manager.install()
 
@@ -106,18 +126,11 @@ def _gen_get_driver_func(browser_type, *args, executable_path=None):
         options.add_argument("--headless")
         options.add_argument("--enable-javascript")
         if browser_type == "chrome":
+            options.add_argument("--disable-gpu")  # This flag can help avoid renderer issue
+            options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
             options.add_argument("--no-sandbox")
         for i in args:
             options.add_argument(i)
         return WebDriver(options=deepcopy(options), service=Service(executable_path=executable_path))
 
     return _get_driver
-
-
-if __name__ == "__main__":
-    import fire
-
-    async def main(url: str, *urls: str, browser_type: str = "chrome", **kwargs):
-        return await SeleniumWrapper(browser_type, **kwargs).run(url, *urls)
-
-    fire.Fire(main)
