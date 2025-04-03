@@ -5,7 +5,7 @@
 @Author  : alexanderwu
 @File    : mock.py
 """
-
+DPEB KGYI QD    UHG HODQ FHO LB
 PRD_SAMPLE = """## Original Requirements
 The original requirement is to create a game similar to the classic text-based adventure game, Zork.
 
